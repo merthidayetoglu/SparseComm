@@ -45,8 +45,8 @@ int main(int argc, char** argv) {
   fread(&numrow,sizeof(int),1,inputf);
   fread(&numcol,sizeof(int),1,inputf);
   if(myrank == 0){
-    printf("NUMBER OF ROWS: %d (%f MB)\n",numrow,numrow*sizeof(double)/1.e6);
-    printf("NUMBER OF COLUMNS: %d (%f MB)\n",numcol,numcol*sizeof(double)/1.e6);
+    printf("NUMBER OF ROWS: %dx%d (%f GB)\n",numrow,numrhs,numrow*sizeof(double)/1.e9*numrhs);
+    printf("NUMBER OF COLUMNS: %dx%d (%f GB)\n",numcol,numrhs,numcol*sizeof(double)/1.e9*numrhs);
   }
   int mynumrow = numrow/numrank;
   if(myrank < numrow%numrank) mynumrow++;
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
   }
   if(myrank == 0)
     for(int rank = 0; rank < numrank; rank++)
-      printf("PROCESS: %d ROWS: %d COLS: %d\n",rank,numrows[rank],numcols[rank]);
+      printf("PROCESS: %d ROWS: %dx%d (%f GB) COLS: %dx%d (%f GB)\n",rank,numrows[rank],numrhs,numrows[rank]*sizeof(double)/1.e9*numrhs,numcols[rank],numrhs,numcols[rank]*sizeof(double)/1.e9*numrhs);
 
   //READ THE SPARSE MATRIX IN PARALLEL
   {
@@ -100,6 +100,7 @@ int main(int argc, char** argv) {
     MPI_Barrier(MPI_COMM_WORLD);
     if(myrank == 0)printf("I/O TIME: %f\n\n",omp_get_wtime()-time);
   }
+  
 
   //FIGURE OUT MEMORY FOOTPRINT
   int *footprint = new int[numcol];
@@ -123,16 +124,19 @@ int main(int argc, char** argv) {
     recvdispl[rank+1] = recvdispl[rank] + recvcount[rank];
     senddispl[rank+1] = senddispl[rank] + sendcount[rank];
   }
-  long sendtot = senddispl[numrank];
-  long recvtot = recvdispl[numrank];
-  MPI_Allreduce(MPI_IN_PLACE,&sendtot,1,MPI_LONG,MPI_SUM,MPI_COMM_WORLD);
-  MPI_Allreduce(MPI_IN_PLACE,&recvtot,1,MPI_LONG,MPI_SUM,MPI_COMM_WORLD);
+  int sendtot = senddispl[numrank];
+  int recvtot = recvdispl[numrank];
+  int sendall[numrank];
+  int recvall[numrank];
+  MPI_Allgather(&sendtot,1,MPI_INT,sendall,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&recvtot,1,MPI_INT,recvall,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE,&sendtot,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE,&recvtot,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
   if(myrank == 0){
     for(int rank = 0; rank < numrank; rank++)
-      printf("send %d recv %d\n",sendcount[rank],recvcount[rank]);
-    printf("TOTAL COMM SEND %ld (%f MB) RECV %ld (%f MB)\n\n",sendtot,sendtot*sizeof(double)/1.e6,recvtot,recvtot*sizeof(double)/1.e6);
+      printf("PROCESS %d SEND %dx%d (%f GB) RECV %dx%d (%f GB)\n",rank,sendall[rank],numrhs,sendall[rank]*sizeof(double)/1.e9*numrhs,recvall[rank],numrhs,recvall[rank]*sizeof(double)/1.e9*numrhs);
+    printf("TOTAL COMM SEND %dx%d (%f GB) RECV %dx%d (%f GB)\n\n",sendtot,numrhs,sendtot*sizeof(double)/1.e9*numrhs,recvtot,numrhs,recvtot*sizeof(double)/1.e9*numrhs);
   }
-
   int *recvindex = new int[recvdispl[numrank]];
   #pragma omp parallel for
   for(int rank = 0; rank < numrank; rank++){
@@ -172,7 +176,7 @@ int main(int argc, char** argv) {
     }
     MPI_Barrier(MPI_COMM_WORLD);
     timekernel = omp_get_wtime()-timekernel;
-    if(myrank == 0)printf("timecomm: %e timekernel: %e\n",timecomm,timekernel);
+    if(myrank == 0)printf("timecomm: %e (%f GB/s) timekernel: %e\n",timecomm,numcol*sizeof(double)/1.e9*numrank/timecomm,timekernel);
     delete[] recvbuff;
   }
   double *Cdense = C;
@@ -206,7 +210,7 @@ int main(int argc, char** argv) {
     }
     MPI_Barrier(MPI_COMM_WORLD);
     timekernel = omp_get_wtime()-timekernel;
-    if(myrank == 0)printf("timereduce: %e timecomm: %e timekernel: %e\n",timereduce,timecomm,timekernel);
+    if(myrank == 0)printf("timepack: %e timecomm: %e (%f GB/s) timekernel: %e\n",timereduce,timecomm,sendtot*sizeof(double)/1.e9/timecomm,timekernel);
   }
 
   double *Csparse = C;
@@ -215,41 +219,6 @@ int main(int argc, char** argv) {
       printf("LAN!\n");
       break;
     }
-
-
-  //PRINT COMMUNICATION MAP
-  /*int commap[numrank*numrank];
-  MPI_Allgather(recvcount,numrank,MPI_INT,commap,numrank,MPI_INT,MPI_COMM_WORLD);
-  if(myrank == 0)
-    for(int m = 0; m < numrank; m++){
-      for(int n = 0; n < numrank; n++)
-        printf("%d ",commap[m*numrank+n]);
-      printf("\n");
-    }
-  if(myrank == 2){
-    printf("process %d sends",myrank);
-    for(int rank = 0; rank < numrank; rank++)
-      printf(" %d",sendcount[rank]);
-    printf("\n");
-    printf("process %d recvs",myrank);
-    for(int rank = 0; rank < numrank; rank++)
-      printf(" %d",recvcount[rank]);
-    printf("\n\n");
-  }*/
-
-  /*int buffsize = 0;
-  for(int n = 0; n < numcol; n++)
-    if(footprint[n] > 0){
-      footprint[n] = buffsize;
-      buffsize++;
-    }
-  //REINDEXING
-  #pragma omp parallel for
-  for(int m = 0; m < mynumrow; m++)
-    for(long n = displ[m]; n < displ[m+1]; n++)
-      index[n] = footprint[index[n]];
-  printf("proc %d buffsize %d\n",myrank,buffsize);*/
-
 
 
   MPI_Barrier(MPI_COMM_WORLD);
