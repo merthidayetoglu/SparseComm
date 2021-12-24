@@ -16,10 +16,10 @@ OBJECTS = main.o
 
 all:	$(TARGETS)
 
-%.o: %.cpp vars.h
+%.o: %.cpp
 	${CXX} ${CXXFLAGS} ${OPTFLAGS} $< -c -o $@
 
-%.o : %.cu vars.h
+%.o : %.cu
 	${NVCC} ${NVCCFLAGS} $< -c -o $@
 
 SparseComm: $(OBJECTS)

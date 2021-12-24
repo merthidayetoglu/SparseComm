@@ -3,37 +3,41 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define PRINTID 0
+
 //GEOMETRY
 char *filename;
-int numcol;
-int numrow;
-long *displ;
-int *index;
-double *value;
+long *csrdispl;
+int *csrindex;
+double *csrvalue;
 int numrhs;
 int numiter;
 
 //TOPOLOGY
-int myrank;
-int numrank;
+int myid;
+int numproc;
+int myid_node;
+int numproc_node;
+int mynode;
+int numnode;
+int myid_socket;
+int numproc_socket;
+int mysocket;
+int numsocket;
 int numthread;
-
-int myrank_node;
-int numrank_node;
-
-int myrank_node_t;
-int numrank_node_t;
 
 MPI_Comm MPI_COMM_NODE;
 MPI_Comm MPI_COMM_NODE_T;
+MPI_Comm MPI_COMM_SOCKET;
+MPI_Comm MPI_COMM_SOCKET_T;
 
 int main(int argc, char** argv) {
 
-  double timetotal = MPI_Wtime();
+  double timetotal = omp_get_wtime();
 
   MPI_Init(&argc,&argv);
-  MPI_Comm_rank(MPI_COMM_WORLD,&myrank);
-  MPI_Comm_size(MPI_COMM_WORLD,&numrank);
+  MPI_Comm_rank(MPI_COMM_WORLD,&myid);
+  MPI_Comm_size(MPI_COMM_WORLD,&numproc);
 
   #pragma omp parallel
   if(omp_get_thread_num() == 0)
@@ -45,370 +49,582 @@ int main(int argc, char** argv) {
   numrhs = atoi(chartemp);
   chartemp = getenv("PERNODE");
   int pernode = atoi(chartemp);
+  chartemp = getenv("PERSOCKET");
+  int persocket = atoi(chartemp);
   chartemp = getenv("NUMITER");
   numiter = atoi(chartemp);
-  MPI_Comm_split(MPI_COMM_WORLD,myrank/pernode,myrank,&MPI_COMM_NODE);
-  MPI_Comm_rank(MPI_COMM_NODE,&myrank_node);
-  MPI_Comm_size(MPI_COMM_NODE,&numrank_node);
 
-  MPI_Comm_split(MPI_COMM_WORLD,myrank%pernode,myrank,&MPI_COMM_NODE_T);
-  MPI_Comm_rank(MPI_COMM_NODE_T,&myrank_node_t);
-  MPI_Comm_size(MPI_COMM_NODE_T,&numrank_node_t);
+  if(numproc%pernode || pernode%persocket){
+    printf("INCONSISTENT NUMBER OF PROCESSES PER NODE OR PER SOCKET: %d %d %d\n",numproc,pernode,persocket);
+    return 0;
+  }
 
-  printf("myrank: %d/%d myrank_node_t: %d/%d myrank_node: %d/%d\n",myrank,numrank,myrank_node_t,numrank_node_t,myrank_node,numrank_node);
+  //WITHIN NODES
+  MPI_Comm_split(MPI_COMM_WORLD,myid/pernode,myid,&MPI_COMM_NODE);
+  MPI_Comm_rank(MPI_COMM_NODE,&myid_node);
+  MPI_Comm_size(MPI_COMM_NODE,&numproc_node);
+  //ACROSS NODES
+  MPI_Comm_split(MPI_COMM_WORLD,myid%numproc_node,myid,&MPI_COMM_NODE_T);
+  MPI_Comm_rank(MPI_COMM_NODE_T,&mynode);
+  MPI_Comm_size(MPI_COMM_NODE_T,&numnode);
+  //WITHIN SOCKETS
+  MPI_Comm_split(MPI_COMM_NODE,myid_node/persocket,myid_node,&MPI_COMM_SOCKET);
+  MPI_Comm_rank(MPI_COMM_SOCKET,&myid_socket);
+  MPI_Comm_size(MPI_COMM_SOCKET,&numproc_socket);
+  //ACROSS SOCKETS
+  MPI_Comm_split(MPI_COMM_NODE,myid_node%numproc_socket,myid_node,&MPI_COMM_SOCKET_T);
+  MPI_Comm_rank(MPI_COMM_SOCKET_T,&mysocket);
+  MPI_Comm_size(MPI_COMM_SOCKET_T,&numsocket);
 
-  if(myrank == 0){
-    printf("\nNUMBER OF PROCESSES: %d\n",numrank);
-    printf("NUMBER OF NODES: %d\n",numrank_node_t);
-    printf("PROCESSES PER NODE: %d\n",numrank_node);
-    printf("NUMBER OF THREADS: %d\n\n",numthread);
+  int myid_all[numproc];
+  int numproc_all[numproc];
+  int myid_node_all[numproc];
+  int numproc_node_all[numproc];
+  int mynode_all[numproc];
+  int numnode_all[numproc];
+  int myid_socket_all[numproc];
+  int numproc_socket_all[numproc];
+  int mysocket_all[numproc];
+  int numsocket_all[numproc];
+  MPI_Allgather(&myid,1,MPI_INT,myid_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&numproc,1,MPI_INT,numproc_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&myid_node,1,MPI_INT,myid_node_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&numproc_node,1,MPI_INT,numproc_node_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&mynode,1,MPI_INT,mynode_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&numnode,1,MPI_INT,numnode_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&myid_socket,1,MPI_INT,myid_socket_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&numproc_socket,1,MPI_INT,numproc_socket_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&mysocket,1,MPI_INT,mysocket_all,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&numsocket,1,MPI_INT,numsocket_all,1,MPI_INT,MPI_COMM_WORLD);
+
+  if(myid == PRINTID){
+    printf("\n");
+    for(int proc = 0; proc < numproc; proc++)
+      printf("myid: %d/%d mynode: %d/%d myid_node: %d/%d mysocket %d/%d myid_socket %d/%d\n",myid_all[proc],numproc_all[proc],mynode_all[proc],numnode_all[proc],myid_node_all[proc],numproc_node_all[proc],mysocket_all[proc],numsocket_all[proc],myid_socket_all[proc],numproc_socket_all[proc]);
+  }
+  if(myid == PRINTID){
+    printf("\nNUMBER OF PROCESSES: %d\n",numproc);
+    printf("PROCESSES PER SOCKET: %d\n",numproc_socket);
+    printf("PROCESSES PER NODE: %d\n",numproc_node);
+    printf("NUMBER OF SOCKETS: %d\n",numsocket);
+    printf("NUMBER OF NODES: %d\n\n",numnode);
+    printf("NUMBER OF THREADS PER PROCESS: %d\n\n",numthread);
     printf("FILE NAME: %s\n",filename);
     printf("NUMBER OF RHS: %d\n",numrhs);
     printf("NUMBER OF ITERATIONS: %d\n\n",numiter);
   }
 
   //READ INPUT MATRIX
+  int numrow;
+  int numcol;
   FILE *inputf = fopen(filename,"rb");
   fread(&numrow,sizeof(int),1,inputf);
   fread(&numcol,sizeof(int),1,inputf);
-  if(myrank == 0){
+  if(myid == PRINTID){
     printf("NUMBER OF ROWS: %d x %d (%f GB)\n",numrow,numrhs,numrow*sizeof(double)/1.e9*numrhs);
     printf("NUMBER OF COLUMNS: %d x %d (%f GB)\n\n",numcol,numrhs,numcol*sizeof(double)/1.e9*numrhs);
   }
-  int mynumrow = numrow/numrank;
-  if(myrank < numrow%numrank) mynumrow++;
-  int mynumcol = numcol/numrank;
-  if(myrank < numcol%numrank) mynumcol++;
-  int numrows[numrank];
-  int numcols[numrank];
+  int mynumrow = numrow/numproc;
+  if(myid < numrow%numproc) mynumrow++;
+  int mynumcol = numcol/numproc;
+  if(myid < numcol%numproc) mynumcol++;
+
+  int numrows[numproc];
+  int numcols[numproc];
   MPI_Allgather(&mynumrow,1,MPI_INT,numrows,1,MPI_INT,MPI_COMM_WORLD);
   MPI_Allgather(&mynumcol,1,MPI_INT,numcols,1,MPI_INT,MPI_COMM_WORLD);
-  int rowdispl[numrank+1];
-  int coldispl[numrank+1];
+  int rowdispl[numproc+1];
+  int coldispl[numproc+1];
   rowdispl[0] = 0;
   coldispl[0] = 0;
-  for(int rank = 0; rank < numrank; rank++){
-    rowdispl[rank+1] = rowdispl[rank] + numrows[rank];
-    coldispl[rank+1] = coldispl[rank] + numcols[rank];
+  for(int proc = 0; proc < numproc; proc++){
+    rowdispl[proc+1] = rowdispl[proc] + numrows[proc];
+    coldispl[proc+1] = coldispl[proc] + numcols[proc];
   }
-  if(myrank == 0)
-    for(int rank = 0; rank < numrank; rank++)
-      printf("PROCESS: %d ROWS: %d x %d (%f GB) COLS: %d x %d (%f GB)\n",rank,numrows[rank],numrhs,numrows[rank]*sizeof(double)/1.e9*numrhs,numcols[rank],numrhs,numcols[rank]*sizeof(double)/1.e9*numrhs);
+  if(myid == PRINTID)
+    for(int proc = 0; proc < numproc; proc++)
+      printf("PROCESS: %d ROWS: %d x %d (%f GB) COLS: %d x %d (%f GB)\n",myid,numrows[proc],numrhs,numrows[proc]*sizeof(double)/1.e9*numrhs,numcols[proc],numrhs,numcols[proc]*sizeof(double)/1.e9*numrhs);
 
   //READ THE SPARSE MATRIX IN PARALLEL
   {
     MPI_Barrier(MPI_COMM_WORLD);
     double time = omp_get_wtime();
-    displ = new long[mynumrow+1];
-    fseek(inputf,sizeof(long)*rowdispl[myrank],SEEK_CUR);
-    fread(displ,sizeof(long),mynumrow+1,inputf);
-    long strind = displ[0];
-    #pragma omp parallel for
+    csrdispl = new long[mynumrow+1];
+    fseek(inputf,sizeof(long)*rowdispl[myid],SEEK_CUR);
+    fread(csrdispl,sizeof(long),mynumrow+1,inputf);
+    long strind = csrdispl[0];
     for(int m = 0; m < mynumrow+1; m++)
-     displ[m] -= strind;
-    long numnztot = displ[mynumrow];
-    long numnzall[numrank];
+      csrdispl[m] -= strind;
+    long numnztot = csrdispl[mynumrow];
+    long numnzall[numproc];
     MPI_Allgather(&numnztot,1,MPI_LONG,numnzall,1,MPI_LONG,MPI_COMM_WORLD);
     MPI_Allreduce(MPI_IN_PLACE,&numnztot,1,MPI_LONG,MPI_SUM,MPI_COMM_WORLD);
-    if(myrank == 0){
-      for(int rank = 0; rank < numrank; rank++)
-        printf("PROCESS: %d NONZEROES: %ld (%f GB)\n",rank,numnzall[rank],numnzall[rank]*(sizeof(int)+sizeof(double))/1.e9);
+    if(myid == PRINTID){
+      for(int proc = 0; proc < numproc; proc++)
+        printf("PROCESS: %d NONZEROES: %ld (%f GB)\n",proc,numnzall[proc],numnzall[proc]*(sizeof(int)+sizeof(double))/1.e9);
       printf("NUMBER OF NONZEROES: %ld (%f GB)\n",numnztot,numnztot*(sizeof(int)+sizeof(double))/1.e9);
     }
-    fseek(inputf,sizeof(long)*(numrow+1-rowdispl[myrank]),SEEK_CUR);
+    fseek(inputf,sizeof(long)*(numrow-rowdispl[myid+1]),SEEK_CUR);
     fseek(inputf,sizeof(int)*strind,SEEK_CUR);
-    index = new int[displ[mynumrow]];
-    fread(index,sizeof(int),displ[mynumrow],inputf);
+    csrindex = new int[csrdispl[mynumrow]];
+    fread(csrindex,sizeof(int),csrdispl[mynumrow],inputf);
     fclose(inputf);
-    value = new double[displ[mynumrow]];
-    #pragma omp parallel for
-    for(long n = 0; n < displ[mynumrow]; n++)
-      value[n] = n;
+    csrvalue = new double[csrdispl[mynumrow]];
+    for(long n = 0; n < csrdispl[mynumrow]; n++)
+      csrvalue[n] = strind+n;
     MPI_Barrier(MPI_COMM_WORLD);
-    if(myrank == 0)printf("I/O TIME: %f\n\n",omp_get_wtime()-time);
+    if(myid == PRINTID)printf("I/O TIME: %f\n\n",omp_get_wtime()-time);
   }
-  
+
+  int sparsity[numrow*numcol];
+  for(int n = 0; n < numrow*numcol; n++)
+    sparsity[n] = 0;
+  for(int m = 0; m < mynumrow; m++)
+    for(int n = csrdispl[m]; n < csrdispl[m+1]; n++)
+      sparsity[(rowdispl[myid]+m)*numcol+csrindex[n]] = 1;
+  MPI_Allreduce(MPI_IN_PLACE,sparsity,numrow*numcol,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
+  if(myid == PRINTID){
+    printf("SPARSITY\n");
+    for(int m = 0; m < numrow; m++){
+      for(int n = 0; n < numcol; n++)
+        printf("%d ",sparsity[m*numcol+n]);
+      printf("\n");
+    }
+    printf("\n");
+  }
+
   double *B = new double[mynumcol*numrhs];
-  #pragma omp parallel for
-  for(int n = 0; n < mynumcol*numrhs; n++)
-    B[n] = n;
+  for(int m = 0; m < mynumcol; m++)
+    for(int k = 0; k < numrhs; k++)
+      B[k*mynumcol+m] = k*numcol+coldispl[myid]+m;
   double *C = new double[mynumrow*numrhs];
 
-  //PERFORM DENSE COMMUNICATIONS
-  {
-    if(myrank == 0){
-      printf("DENSE COMMUNICATIONS\n");
-      for(int rank = 0; rank < numrank; rank++)
-        printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",rank,numcols[rank]*numrank,numrhs,numcols[rank]*numrank*sizeof(double)/1.e9*numrhs,numcol,numrhs,numcol*sizeof(double)/1.e9*numrhs);
-      printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n\n",numcol*numrank,numrhs,numcol*numrank*sizeof(double)/1.e9*numrhs,numcol*numrank,numrhs,numcol*numrank*sizeof(double)/1.e9*numrhs);
-    }
-    double *recvbuff = new double[numcol*numrhs];
-    double *unpackbuff = new double[numcol*numrhs];
-    int numcolsdense[numrank];
-    for(int rank = 0; rank < numrank; rank++)
-      numcolsdense[rank] = numcols[rank]*numrhs;
-    int coldispldense[numrank+1];
-    for(int rank = 0; rank < numrank+1; rank++)
-      coldispldense[rank] = coldispl[rank]*numrhs;
-    int *unpackindex = new int[numcol*numrhs];
-    for(int rank = 0; rank < numrank; rank++)
-      #pragma omp parallel for
-      for(int m = coldispl[rank]; m < coldispl[rank+1]; m++)
-        for(int k = 0; k < numrhs; k++)
-          unpackindex[k*numcol+m] = coldispldense[rank]+k*numcols[rank]+m-coldispl[rank];
-    /*for(int k = 0; k < numrhs; k++){
-      MPI_Allgatherv(B+k*mynumcol,mynumcol,MPI_DOUBLE,recvbuff,numcols,coldispl,MPI_DOUBLE,MPI_COMM_WORLD);
-      for(int m = 0; m < mynumrow; m++){
-        double reduce = 0;
-	for(long n = displ[m]; n < displ[m+1]; n++)
-	  reduce += recvbuff[index[n]]*value[n];
-	C[k*mynumrow+m] = reduce;
-      }
-    }*/
-    for(int iter = 0; iter < numiter; iter++){
-      MPI_Barrier(MPI_COMM_WORLD);
-      double timecomm = omp_get_wtime();
-      MPI_Allgatherv(B,mynumcol*numrhs,MPI_DOUBLE,recvbuff,numcolsdense,coldispldense,MPI_DOUBLE,MPI_COMM_WORLD);
-      MPI_Barrier(MPI_COMM_WORLD);
-      timecomm = omp_get_wtime()-timecomm;
-      double timepack = omp_get_wtime();
-      #pragma omp parallel for
-      for(int n = 0; n < numcol*numrhs; n++)
-        unpackbuff[n] = recvbuff[unpackindex[n]];
-      MPI_Barrier(MPI_COMM_WORLD);
-      timepack = omp_get_wtime()-timepack;
-      double timekernel = omp_get_wtime();
-      #pragma omp parallel for
-      for(int m = 0; m < mynumrow; m++){
-        double reduce[numrhs] = {0};
-        for(long n = displ[m]; n < displ[m+1]; n++){
-          int ind = index[n];
-          double val = value[n]; 
-          for(int k = 0; k < numrhs; k++)
-            reduce[k] += unpackbuff[k*numcol+ind]*val;
-        }
-        for(int k = 0; k < numrhs; k++)
-          C[k*mynumrow+m] = reduce[k];
-      }
-      MPI_Barrier(MPI_COMM_WORLD);
-      timekernel = omp_get_wtime()-timekernel;
-      if(myrank == 0)printf("timecomm: %e (%f GB/s) timepack: %e timekernel: %e\n",timecomm,numcol*sizeof(double)/1.e9*numrank/timecomm*numrhs,timepack,timekernel);
-    }
-    delete[] recvbuff;
-    delete[] unpackbuff;
-    delete[] unpackindex;
+  //FIND COMMUNICATION FOOTPRINT OF EACH PROCESS
+  bool *footprint = new bool[numcol];
+  for(int n = 0; n < numcol; n++)
+    footprint[n] = false;
+  for(int m = 0; m < mynumrow; m++)
+    for(long n = csrdispl[m]; n < csrdispl[m+1]; n++)
+      footprint[csrindex[n]] = true;
+  //FIND GLOBAL COMMUNICATIONS
+  bool *footprint_node = new bool[numcol];
+  MPI_Allreduce(footprint,footprint_node,numcol,MPI_C_BOOL,MPI_LOR,MPI_COMM_NODE);
+  int sendcount_global[numnode];
+  int recvcount_global[numnode];
+  for(int node = 0; node < numnode; node++){
+    int count = 0;
+    int proc = node*numproc_node+myid_node;
+    for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+      if(footprint_node[m])
+        count++;
+    recvcount_global[node] = count;
   }
-  double *Cdense = C;
-  C = new double[mynumrow*numrhs];
-  //PERFORM SPARSE COMM
-  {
-    //FIND COMMUNICATION FOOTPRINT
-    int *footprint = new int[numcol];
-    #pragma omp parallel for
-    for(int n = 0; n < numcol; n++)
-      footprint[n] = 0;
-    for(int m = 0; m < mynumrow; m++)
-      for(long n = displ[m]; n < displ[m+1]; n++)
-        footprint[index[n]] = 1;
-    int recvcount[numrank] = {0};
-    #pragma omp parallel for
-    for(int rank = 0; rank < numrank; rank++)
-      for(int n = coldispl[rank]; n < coldispl[rank+1]; n++)
-        if(footprint[n] > 0)
-          recvcount[rank]++;
-    int sendcount[numrank];
-    MPI_Alltoall(recvcount,1,MPI_INT,sendcount,1,MPI_INT,MPI_COMM_WORLD);
-    int recvdispl[numrank+1] = {0};
-    int senddispl[numrank+1] = {0};
-    for(int rank = 0; rank < numrank; rank++){
-      recvdispl[rank+1] = recvdispl[rank] + recvcount[rank];
-      senddispl[rank+1] = senddispl[rank] + sendcount[rank];
+  MPI_Alltoall(recvcount_global,1,MPI_INT,sendcount_global,1,MPI_INT,MPI_COMM_NODE_T);
+  int senddispl_global[numnode+1];
+  int recvdispl_global[numnode+1];
+  senddispl_global[0] = 0;
+  recvdispl_global[0] = 0;
+  for(int node = 0; node < numnode; node++){
+    senddispl_global[node+1] = senddispl_global[node] + sendcount_global[node];
+    recvdispl_global[node+1] = recvdispl_global[node] + recvcount_global[node];
+  }
+  int commap_global[numproc*numproc];
+  for(int m = 0; m < numproc*numproc; m++)
+    commap_global[m] = 0;
+  for(int node = 0; node < numnode; node++){
+    int proc = node*numproc_node+myid_node;
+    if(recvcount_global[node])
+      commap_global[myid*numproc+proc] = recvcount_global[node];
+  }
+  MPI_Allreduce(MPI_IN_PLACE,commap_global,numproc*numproc,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
+  int sendall_global[numproc];
+  int recvall_global[numproc];
+  MPI_Allgather(&senddispl_global[numnode],1,MPI_INT,sendall_global,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&recvdispl_global[numnode],1,MPI_INT,recvall_global,1,MPI_INT,MPI_COMM_WORLD);
+  if(myid == PRINTID){
+    printf("\n");
+    printf("GLOBAL (INTER-NODE) COMMUNICATIONS\n");
+    int sendtot = 0;
+    int recvtot = 0;
+    for(int proc = 0; proc < numproc; proc++){
+      printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",proc,sendall_global[proc],numrhs,sendall_global[proc]*sizeof(double)/1.e9*numrhs,recvall_global[proc],numrhs,recvall_global[proc]*sizeof(double)/1.e9*numrhs);
+      sendtot += sendall_global[proc];
+      recvtot += recvall_global[proc];
     }
-    int sendtot = senddispl[numrank];
-    int recvtot = recvdispl[numrank];
-    int sendall[numrank];
-    int recvall[numrank];
-    MPI_Allgather(&sendtot,1,MPI_INT,sendall,1,MPI_INT,MPI_COMM_WORLD);
-    MPI_Allgather(&recvtot,1,MPI_INT,recvall,1,MPI_INT,MPI_COMM_WORLD);
-    MPI_Allreduce(MPI_IN_PLACE,&sendtot,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    MPI_Allreduce(MPI_IN_PLACE,&recvtot,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    if(myrank == 0){
-      printf("\nSPARSE COMMUNICATIONS\n");
-      for(int rank = 0; rank < numrank; rank++)
-        printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",rank,sendall[rank],numrhs,sendall[rank]*sizeof(double)/1.e9*numrhs,recvall[rank],numrhs,recvall[rank]*sizeof(double)/1.e9*numrhs);
-      printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n\n",sendtot,numrhs,sendtot*sizeof(double)/1.e9*numrhs,recvtot,numrhs,recvtot*sizeof(double)/1.e9*numrhs);
+    printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",sendtot,numrhs,sendtot*sizeof(double)/1.e9*numrhs,recvtot,numrhs,recvtot*sizeof(double)/1.e9*numrhs);
+    printf("COMM MAP:\n");
+    for(int m = 0; m < numproc; m++){
+      for(int n = 0; n < numproc; n++)
+        printf("%d ",commap_global[m*numproc+n]);
+      printf("\n");
     }
-    //CONSTRUCT SEND & RECEIVE INDICES
-    int *recvindex = new int[recvdispl[numrank]];
-    int *sendindex = new int[senddispl[numrank]];
-    #pragma omp parallel for
-    for(int rank = 0; rank < numrank; rank++){
-      int count = 0;
-      for(int n = coldispl[rank]; n < coldispl[rank+1]; n++)
-        if(footprint[n] > 0){
-          int index = recvdispl[rank]+count;
-          recvindex[index] = n-coldispl[rank];
-          footprint[n] = index;
+  }
+  int *sendindex_global = new int[senddispl_global[numnode]];
+  int *recvindex_global = new int[recvdispl_global[numnode]];
+  int *indextemp_node = new int[numcol];
+  for(int node = 0; node < numnode; node++){
+    int count = 0;
+    int proc = node*numproc_node+myid_node;
+    for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+      if(footprint_node[m]){
+        int index = recvdispl_global[node] + count;
+        recvindex_global[index] = m;
+        indextemp_node[m] = index;
+        count++;
+      }
+  }
+  MPI_Alltoallv(recvindex_global,recvcount_global,recvdispl_global,MPI_INT,sendindex_global,sendcount_global,senddispl_global,MPI_INT,MPI_COMM_NODE_T);
+  for(int m = 0; m < senddispl_global[numnode]; m++)
+    sendindex_global[m] -= coldispl[myid];
+  delete[] recvindex_global;
+  delete[] footprint_node;
+  //FIND NODE-LEVEL COMMUNICATIONS
+  bool *footprint_socket = new bool[numcol];
+  MPI_Allreduce(footprint,footprint_socket,numcol,MPI_C_BOOL,MPI_LOR,MPI_COMM_SOCKET);
+  int sendcount_node[numsocket];
+  int recvcount_node[numsocket];
+  for(int socket = 0; socket < numsocket; socket++){
+    int count = 0;
+    for(int node = 0; node < numnode; node++){
+      int proc = node*numproc_node+socket*numproc_socket+myid_socket;
+      for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+        if(footprint_socket[m])
+          count++;
+    }
+    recvcount_node[socket] = count;
+  }
+  MPI_Alltoall(recvcount_node,1,MPI_INT,sendcount_node,1,MPI_INT,MPI_COMM_SOCKET_T);
+  int senddispl_node[numsocket+1];
+  int recvdispl_node[numsocket+1];
+  senddispl_node[0] = 0;
+  recvdispl_node[0] = 0;
+  for(int socket = 0; socket < numsocket; socket++){
+    senddispl_node[socket+1] = senddispl_node[socket] + sendcount_node[socket];
+    recvdispl_node[socket+1] = recvdispl_node[socket] + recvcount_node[socket];
+  }
+  int commap_node[numproc*numproc];
+  for(int m = 0; m < numproc*numproc; m++)
+    commap_node[m] = 0;
+  for(int socket = 0; socket < numsocket; socket++){
+    int proc = mynode*numproc_node+socket*numproc_socket+myid_socket;
+    if(recvcount_node[socket])
+      commap_node[myid*numproc+proc] = recvcount_node[socket];
+  }
+  MPI_Allreduce(MPI_IN_PLACE,commap_node,numproc*numproc,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
+  int sendall_node[numproc];
+  int recvall_node[numproc];
+  MPI_Allgather(&senddispl_node[numsocket],1,MPI_INT,sendall_node,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&recvdispl_node[numsocket],1,MPI_INT,recvall_node,1,MPI_INT,MPI_COMM_WORLD);
+  if(myid == PRINTID){
+    printf("\n");
+    printf("INTER-SOCKET (INTRA-NODE) COMMUNICATIONS\n");
+    int sendtot = 0;
+    int recvtot = 0;
+    for(int proc = 0; proc < numproc; proc++){
+      printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",proc,sendall_node[proc],numrhs,sendall_node[proc]*sizeof(double)/1.e9*numrhs,recvall_node[proc],numrhs,recvall_node[proc]*sizeof(double)/1.e9*numrhs);
+      sendtot += sendall_node[proc];
+      recvtot += recvall_node[proc];
+    }
+    printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",sendtot,numrhs,sendtot*sizeof(double)/1.e9*numrhs,recvtot,numrhs,recvtot*sizeof(double)/1.e9*numrhs);
+    printf("COMM MAP:\n");
+    for(int m = 0; m < numproc; m++){
+      for(int n = 0; n < numproc; n++)
+        printf("%d ",commap_node[m*numproc+n]);
+      printf("\n");
+    }
+  }
+  int *recvindex_node = new int[recvdispl_node[numsocket]];
+  int *sendindex_node = new int[senddispl_node[numsocket]];
+  int *indextemp_socket = new int[numcol];
+  for(int socket = 0; socket < numsocket; socket++){
+    int count = 0;
+    for(int node = 0; node < numnode; node++){
+      int proc = node*numproc_node+socket*numproc_socket+myid_socket;
+      for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+        if(footprint_socket[m]){
+          int index = recvdispl_node[socket] + count;
+          recvindex_node[index] = m;
+          indextemp_socket[m] = index;
           count++;
         }
     }
-    MPI_Alltoallv(recvindex,recvcount,recvdispl,MPI_INT,sendindex,sendcount,senddispl,MPI_INT,MPI_COMM_WORLD);
-    //UPDATE INDEX VALUES
-    int *index_temp = new int[displ[mynumrow]];
-    #pragma omp parallel for
-    for(int m = 0; m < mynumrow; m++)
-      for(long n = displ[m]; n < displ[m+1]; n++)
-        index_temp[n] = footprint[index[n]];
-
-    double *recvbuff = new double[recvdispl[numrank]*numrhs];
-    double *sendbuff = new double[senddispl[numrank]*numrhs];
-    int sendcountsparse[numrank];
-    int senddisplsparse[numrank+1];
-    int recvcountsparse[numrank];
-    int recvdisplsparse[numrank+1];
-    for(int rank = 0; rank < numrank; rank++){
-      sendcountsparse[rank] = sendcount[rank]*numrhs;
-      recvcountsparse[rank] = recvcount[rank]*numrhs;
-    }
-    for(int rank = 0; rank < numrank+1; rank++){
-      senddisplsparse[rank] = senddispl[rank]*numrhs;
-      recvdisplsparse[rank] = recvdispl[rank]*numrhs;
-    }
-    int *packindex = new int[senddisplsparse[numrank]];
-    int *unpackindex = new int[recvdisplsparse[numrank]];
-    for(int rank = 0; rank < numrank; rank++)
-      #pragma omp parallel for
-      for(int n = senddispl[rank]; n < senddispl[rank+1]; n++)
-        for(int k = 0; k < numrhs; k++)
-          packindex[senddisplsparse[rank]+k*sendcount[rank]+n-senddispl[rank]] = k*mynumcol+sendindex[n];
-    for(int rank = 0; rank < numrank; rank++)
-      #pragma omp parallel for
-      for(int m = recvdispl[rank]; m < recvdispl[rank+1]; m++)
-        for(int k = 0; k < numrhs; k++)
-          unpackindex[k*recvdispl[numrank]+m] = recvdisplsparse[rank]+k*recvcount[rank]+m-recvdispl[rank];
-    double *unpackbuff = new double[recvdisplsparse[numrank]];
-
-    /*for(int k = 0; k < numrhs; k++){
-      for(int n = 0; n < senddispl[numrank]; n++)
-        sendbuff[n] = sendindex[n];
-      MPI_Alltoallv(sendbuff,sendcount,senddispl,MPI_DOUBLE,recvbuff,recvcount,recvdispl,MPI_DOUBLE,MPI_COMM_WORLD);
-      for(int m = 0; m < mynumrow; m++){
-        double reduce = 0;
-	for(long n = displ[m]; n < displ[m+1]; n++)
-          reduce += recvbuff[index[n]]*value[n];
-        C[k*mynumrow+m] = reduce;
-      }
-    }*/
-
-    for(int iter = 0; iter < numiter; iter++){
-      MPI_Barrier(MPI_COMM_WORLD);
-      double timepack = omp_get_wtime();
-      #pragma omp parallel for
-      for(int n = 0; n < senddispl[numrank]*numrhs; n++)
-        sendbuff[n] = B[packindex[n]];
-      MPI_Barrier(MPI_COMM_WORLD);
-      timepack = omp_get_wtime()-timepack;
-      double timecomm = omp_get_wtime();
-      MPI_Alltoallv(sendbuff,sendcountsparse,senddisplsparse,MPI_DOUBLE,recvbuff,recvcountsparse,recvdisplsparse,MPI_DOUBLE,MPI_COMM_WORLD);
-      MPI_Barrier(MPI_COMM_WORLD);
-      timecomm = omp_get_wtime()-timecomm;
-      double timeunpack = omp_get_wtime();
-      #pragma omp parallel for
-      for(int n = 0; n < recvdispl[numrank]*numrhs; n++)
-        unpackbuff[n] = recvbuff[unpackindex[n]];
-      MPI_Barrier(MPI_COMM_WORLD);
-      timeunpack  = omp_get_wtime()-timeunpack;
-      double timekernel = omp_get_wtime();
-      #pragma omp parallel for
-      for(int m = 0; m < mynumrow; m++){
-        double reduce[numrhs] = {0};
-        for(long n = displ[m]; n < displ[m+1]; n++){
-          int ind = index_temp[n];
-          double val = value[n];
-          for(int k = 0; k < numrhs; k++)
-            reduce[k] += unpackbuff[k*recvdispl[numrank]+ind]*val;
-        }
-        for(int k = 0; k < numrhs; k++)
-          C[k*mynumrow+m] = reduce[k];
-      }
-      MPI_Barrier(MPI_COMM_WORLD);
-      timekernel = omp_get_wtime()-timekernel;
-      if(myrank == 0)printf("timepack: %e timecomm: %e (%f GB/s) timeunpack: %e timekernel: %e\n",timepack,timecomm,sendtot*sizeof(double)/1.e9/timecomm*numrhs,timeunpack,timekernel);
-    }
-    delete[] sendbuff;
-    delete[] recvbuff;
-    delete[] packindex;
-    delete[] unpackindex;
-    delete[] unpackbuff;
   }
-  for(int m = 0; m < mynumrow*numrhs; m++)
-    if(Cdense[m] != C[m]){
-      printf("%e %e LAN!!!!!!!!!!!!!!!!!!!!!!!\n",Cdense[m],C[m]);
-      break;
+  MPI_Alltoallv(recvindex_node,recvcount_node,recvdispl_node,MPI_INT,sendindex_node,sendcount_node,senddispl_node,MPI_INT,MPI_COMM_SOCKET_T);
+  for(int m = 0; m < senddispl_node[numsocket]; m++)
+    sendindex_node[m] = indextemp_node[sendindex_node[m]];
+  delete[] footprint_socket;
+  delete[] recvindex_node;
+  delete[] indextemp_node;
+  //FIND SOCKET-LEVEL COMMUNICATIONS
+  int sendcount_socket[numproc_socket];
+  int recvcount_socket[numproc_socket];
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++){
+    int count = 0;
+    for(int socket = 0; socket < numsocket; socket++)
+      for(int node = 0; node < numnode; node++){
+        int proc = node*numproc_node+socket*numproc_socket+proc_socket;
+        for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+          if(footprint[m])
+            count++;
+      }
+    recvcount_socket[proc_socket] = count;
+  }
+  MPI_Alltoall(recvcount_socket,1,MPI_INT,sendcount_socket,1,MPI_INT,MPI_COMM_SOCKET);
+  int senddispl_socket[numproc_socket+1];
+  int recvdispl_socket[numproc_socket+1];
+  senddispl_socket[0] = 0;
+  recvdispl_socket[0] = 0;
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++){
+    senddispl_socket[proc_socket+1] = senddispl_socket[proc_socket] + sendcount_socket[proc_socket];
+    recvdispl_socket[proc_socket+1] = recvdispl_socket[proc_socket] + recvcount_socket[proc_socket];
+  }
+  int sendall_socket[numproc];
+  int recvall_socket[numproc];
+  MPI_Allgather(&senddispl_socket[numproc_socket],1,MPI_INT,sendall_socket,1,MPI_INT,MPI_COMM_WORLD);
+  MPI_Allgather(&recvdispl_socket[numproc_socket],1,MPI_INT,recvall_socket,1,MPI_INT,MPI_COMM_WORLD);
+  int commap_socket[numproc*numproc];
+  for(int m = 0; m < numproc*numproc; m++)
+    commap_socket[m] = 0;
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++){
+    int proc = mynode*numproc_node+mysocket*numproc_socket+proc_socket;
+    if(recvcount_socket[proc_socket])
+      commap_socket[myid*numproc+proc] = recvcount_socket[proc_socket];
+  }
+  MPI_Allreduce(MPI_IN_PLACE,commap_socket,numproc*numproc,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
+  if(myid == PRINTID){
+    printf("\n");
+    printf("INTRA-SOCKET COMMUNICATIONS\n");
+    int sendtot = 0;
+    int recvtot = 0;
+    for(int proc = 0; proc < numproc; proc++){
+      printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",proc,sendall_socket[proc],numrhs,sendall_socket[proc]*sizeof(double)/1.e9*numrhs,recvall_socket[proc],numrhs,recvall_socket[proc]*sizeof(double)/1.e9*numrhs);
+      sendtot += sendall_socket[proc];
+      recvtot += recvall_socket[proc];
     }
+    printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",sendtot,numrhs,sendtot*sizeof(double)/1.e9*numrhs,recvtot,numrhs,recvtot*sizeof(double)/1.e9*numrhs);
+    printf("COMM MAP:\n");
+    for(int m = 0; m < numproc; m++){
+      for(int n = 0; n < numproc; n++)
+        printf("%d ",commap_socket[m*numproc+n]);
+      printf("\n");
+    }
+  }
+  int *sendindex_socket = new int[senddispl_socket[numproc_socket]];
+  int *recvindex_socket = new int[recvdispl_socket[numproc_socket]];
+  int *indextemp = new int[numcol];
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++){
+    int count = 0;
+    for(int socket = 0; socket < numsocket; socket++)
+      for(int node = 0; node < numnode; node++){
+        int proc = node*numproc_node+socket*numproc_socket+proc_socket;
+        for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+          if(footprint[m]){
+            int index = recvdispl_socket[proc_socket] + count;
+            recvindex_socket[index] = m;
+            indextemp[m] = index;
+            count++;
+          }
+      }
+  }
+  MPI_Alltoallv(recvindex_socket,recvcount_socket,recvdispl_socket,MPI_INT,sendindex_socket,sendcount_socket,senddispl_socket,MPI_INT,MPI_COMM_SOCKET);
+  for(int m = 0; m < senddispl_socket[numproc_socket]; m++)
+    sendindex_socket[m] = indextemp_socket[sendindex_socket[m]];
+  delete[] recvindex_socket;
+  delete[] indextemp_socket;
+  //FIND SELF COMMUNICATIONS
+  int recvcount[numproc];
+  for(int proc = 0; proc < numproc; proc++){
+    int count = 0;
+    for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+      if(footprint[m])
+        count++;
+    recvcount[proc] = count;
+  }
+  int recvdispl[numproc+1];
+  recvdispl[0] = 0;
+  for(int proc = 0; proc < numproc; proc++)
+    recvdispl[proc+1] = recvdispl[proc] + recvcount[proc];
+  int *recvindex = new int[recvdispl[numproc]];
+  for(int proc = 0; proc < numproc; proc++){
+    int count = 0;
+    for(int m = coldispl[proc]; m < coldispl[proc+1]; m++)
+      if(footprint[m]){
+        int index = recvdispl[proc] + count;
+        recvindex[index] = indextemp[m];
+	indextemp[m] = index;
+        count++;
+      }
+  }
+  delete[] footprint;
+  //UPDATE CSR INDICES
+  for(long n = 0; n < csrdispl[mynumrow]; n++)
+    csrindex[n] = indextemp[csrindex[n]];
+  delete[] indextemp;
+
+  //CONSTRUCT MULTIPLE RHS PACKING & UNPACKING INDICES
+  int *tempindex_global = sendindex_global;
+  sendindex_global = new int[senddispl_global[numnode]*numrhs];
+  int *unpack_global = new int[recvdispl_global[numnode]*numrhs];
+  for(int node = 0; node < numnode; node++)
+    for(int k = 0; k < numrhs; k++){
+      for(int m = 0; m < sendcount_global[node]; m++)
+        sendindex_global[senddispl_global[node]*numrhs+sendcount_global[node]*k+m] = k*mynumcol+tempindex_global[senddispl_global[node]+m];
+      for(int m = 0; m < recvcount_global[node]; m++)
+        unpack_global[k*recvdispl_global[numnode]+recvdispl_global[node]+m] = recvdispl_global[node]*numrhs+recvcount_global[node]*k+m;
+    }
+  delete[] tempindex_global;
+  int *tempindex_node = sendindex_node;
+  sendindex_node = new int[senddispl_node[numsocket]*numrhs];
+  int *unpack_node = new int[recvdispl_node[numsocket]*numrhs];
+  for(int socket = 0; socket < numsocket; socket++)
+    for(int k = 0; k < numrhs; k++){
+      for(int m = 0; m < sendcount_node[socket]; m++)
+        sendindex_node[senddispl_node[socket]*numrhs+sendcount_node[socket]*k+m] = unpack_global[k*recvdispl_global[numnode]+tempindex_node[senddispl_node[socket]+m]];
+      for(int m = 0; m < recvcount_node[socket]; m++)
+        unpack_node[k*recvdispl_node[numsocket]+recvdispl_node[socket]+m] = recvdispl_node[socket]*numrhs+recvcount_node[socket]*k+m;
+    }
+  delete[] unpack_global;
+  delete[] tempindex_node;
+  int *tempindex_socket = sendindex_socket;
+  sendindex_socket = new int[senddispl_socket[numproc_socket]*numrhs];
+  int *unpack_socket = new int[recvdispl_socket[numproc_socket]*numrhs];
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++)
+    for(int k = 0; k < numrhs; k ++){
+      for(int m = 0; m < sendcount_socket[proc_socket]; m++)
+        sendindex_socket[senddispl_socket[proc_socket]*numrhs+sendcount_socket[proc_socket]*k+m] = unpack_node[k*recvdispl_node[numsocket]+tempindex_socket[senddispl_socket[proc_socket]+m]];
+      for(int m = 0; m < recvcount_socket[proc_socket]; m++)
+        unpack_socket[k*recvdispl_socket[numproc_socket]+recvdispl_socket[proc_socket]+m] = recvdispl_socket[proc_socket]*numrhs+recvcount_socket[proc_socket]*k+m;
+    }
+  delete[] unpack_node;
+  delete[] tempindex_socket;
+  int *tempindex = recvindex;
+  recvindex = new int[recvdispl[numproc]*numrhs];
+  for(int k = 0; k < numrhs; k++)
+    for(int m = 0; m < recvdispl[numproc]; m++)
+        recvindex[k*recvdispl[numproc]+m] = unpack_socket[k*recvdispl[numproc]+tempindex[m]];
+  delete[] unpack_socket;
+  delete[] tempindex;
+
+
+  int commsendcount_global[numnode];
+  int commrecvcount_global[numnode];
+  int commsenddispl_global[numnode+1];
+  int commrecvdispl_global[numnode+1];
+  for(int node = 0; node < numnode; node++){
+    commsendcount_global[node] = sendcount_global[node]*numrhs;
+    commrecvcount_global[node] = recvcount_global[node]*numrhs;
+    commsenddispl_global[node] = senddispl_global[node]*numrhs;
+    commrecvdispl_global[node] = recvdispl_global[node]*numrhs;
+  }
+  commsenddispl_global[numnode] = senddispl_global[numnode]*numrhs;
+  commrecvdispl_global[numnode] = recvdispl_global[numnode]*numrhs;
+  int commsendcount_node[numsocket];
+  int commrecvcount_node[numsocket];
+  int commsenddispl_node[numsocket+1];
+  int commrecvdispl_node[numsocket+1];
+  for(int socket = 0; socket < numsocket; socket++){
+    commsendcount_node[socket] = sendcount_node[socket]*numrhs;
+    commrecvcount_node[socket] = recvcount_node[socket]*numrhs;
+    commsenddispl_node[socket] = senddispl_node[socket]*numrhs;
+    commrecvdispl_node[socket] = recvdispl_node[socket]*numrhs;
+  }
+  commsenddispl_node[numsocket] = senddispl_node[numsocket]*numrhs;
+  commrecvdispl_node[numsocket] = recvdispl_node[numsocket]*numrhs;
+  int commsendcount_socket[numproc_socket];
+  int commrecvcount_socket[numproc_socket];
+  int commsenddispl_socket[numproc_socket+1];
+  int commrecvdispl_socket[numproc_socket+1];
+  for(int proc_socket = 0; proc_socket < numproc_socket; proc_socket++){
+    commsendcount_socket[proc_socket] = sendcount_socket[proc_socket]*numrhs;
+    commrecvcount_socket[proc_socket] = recvcount_socket[proc_socket]*numrhs;
+    commsenddispl_socket[proc_socket] = senddispl_socket[proc_socket]*numrhs;
+    commrecvdispl_socket[proc_socket] = recvdispl_socket[proc_socket]*numrhs;
+  }
+  commsenddispl_socket[numproc_socket] = senddispl_socket[numproc_socket]*numrhs;
+  commrecvdispl_socket[numproc_socket] = recvdispl_socket[numproc_socket]*numrhs;
+
+  double *sendbuff_global = new double[senddispl_global[numnode]*numrhs];
+  double *recvbuff_global = new double[recvdispl_global[numnode]*numrhs];
+  double *sendbuff_node = new double[senddispl_node[numsocket]*numrhs];
+  double *recvbuff_node = new double[recvdispl_node[numsocket]*numrhs];
+  double *sendbuff_socket = new double[senddispl_socket[numproc_socket]*numrhs];
+  double *recvbuff_socket = new double[recvdispl_socket[numproc_socket]*numrhs];
+  double *recvbuff = new double[recvdispl[numproc]*numrhs];
+
+  #pragma omp parallel for
+  for(int m = 0; m < senddispl_global[numnode]*numrhs; m++)
+    sendbuff_global[m] = B[sendindex_global[m]];
+  MPI_Alltoallv(sendbuff_global,commsendcount_global,commsenddispl_global,MPI_DOUBLE,recvbuff_global,commrecvcount_global,commrecvdispl_global,MPI_DOUBLE,MPI_COMM_NODE_T);
+  #pragma omp parallel for
+  for(int m = 0; m < senddispl_node[numsocket]*numrhs; m++)
+    sendbuff_node[m] = recvbuff_global[sendindex_node[m]];
+  MPI_Alltoallv(sendbuff_node,commsendcount_node,commsenddispl_node,MPI_DOUBLE,recvbuff_node,commrecvcount_node,commrecvdispl_node,MPI_DOUBLE,MPI_COMM_SOCKET_T);
+  #pragma omp parallel for
+  for(int m = 0; m < senddispl_socket[numproc_socket]*numrhs; m++)
+    sendbuff_socket[m] = recvbuff_node[sendindex_socket[m]];
+  MPI_Alltoallv(sendbuff_socket,commsendcount_socket,commsenddispl_socket,MPI_DOUBLE,recvbuff_socket,commrecvcount_socket,commrecvdispl_socket,MPI_DOUBLE,MPI_COMM_SOCKET);
+  #pragma omp parallel for
+  for(int m = 0; m < recvdispl[numproc]*numrhs; m++)
+    recvbuff[m] = recvbuff_socket[recvindex[m]];
+
+  for(int k = 0; k < numrhs; k++)
+    #pragma omp parallel for
+    for(int m = 0; m < mynumrow; m++){
+      double reduce = 0;
+      for(int n = csrdispl[m]; n < csrdispl[m+1]; n++)
+        reduce += recvbuff[k*recvdispl[numproc]+csrindex[n]]*csrvalue[n];
+      C[k*mynumrow+m] = reduce;
+    }
+
+  double *Ball = new double[numcol*numrhs];
+  double *Call = new double[numrow*numrhs];
+  for(int k = 0; k < numrhs; k++){
+    MPI_Allgatherv(C+k*mynumrow,mynumrow,MPI_DOUBLE,Call+k*numrow,numrows,rowdispl,MPI_DOUBLE,MPI_COMM_WORLD);
+    MPI_Allgatherv(B+k*mynumcol,mynumcol,MPI_DOUBLE,Ball+k*numcol,numcols,coldispl,MPI_DOUBLE,MPI_COMM_WORLD);
+  }
+  if(myid == PRINTID){
+    printf("\nB:\n");
+    for(int m = 0; m < numcol; m++){
+      for(int k = 0; k < numrhs; k++)
+        printf("%.0f ",Ball[k*numcol+m]);
+      printf("\n");
+    }
+    printf("\nC:\n");
+    for(int m = 0; m < numrow; m++){
+      for(int k = 0; k < numrhs; k++)
+        printf("%.0f ",Call[k*numrow+m]);
+      printf("\n");
+    }
+  }
+  delete[] Ball;
+  delete[] Call;
+
+  delete[] sendbuff_global;
+  delete[] recvbuff_global;
+  delete[] sendbuff_node;
+  delete[] recvbuff_node;
+  delete[] sendbuff_socket;
+  delete[] recvbuff_socket;
+  delete[] recvbuff;
+
+  delete[] sendindex_global;
+  delete[] sendindex_node;
+  delete[] sendindex_socket;
+  delete[] recvindex;
+
+  delete[] csrdispl;
+  delete[] csrindex;
+  delete[] csrvalue;
+  delete[] B;
   delete[] C;
-  C = new double[mynumrow*numrhs];
-  //PERFORM HIERARCHICAL COMM
-  {
-    //FIND COMMUNICATION FOOTPRINT OF EACH NODE
-    int *footprint_node = new int[numcol];
-    #pragma omp parallel for
-    for(int n = 0; n < numcol; n++)
-      footprint_node[n] = 0;
-    for(int m = 0; m < mynumrow; m++)
-      for(long n = displ[m]; n < displ[m+1]; n++)
-        footprint_node[index[n]] = 1;
-    MPI_Allreduce(MPI_IN_PLACE,footprint_node,numcol,MPI_INT,MPI_SUM,MPI_COMM_NODE);
-    int recvcount_node[numrank_node_t] = {0};
-    #pragma omp parallel for
-    for(int node = 0; node < numrank_node_t; node++){
-      int rank = node*numrank_node+myrank_node;
-      for(int m = coldispl[rank]; m < coldispl[rank+1]; m++)
-        if(footprint_node[m] > 0)
-          recvcount_node[node]++;
-    }
-    int sendcount_node[numrank_node_t];
-    MPI_Alltoall(recvcount_node,1,MPI_INT,sendcount_node,1,MPI_INT,MPI_COMM_NODE_T);
-    int recvdispl_node[numrank_node_t+1] = {0};
-    int senddispl_node[numrank_node_t+1] = {0};
-    for(int node = 0; node < numrank_node_t; node++){
-      recvdispl_node[node+1] = recvdispl_node[node] + recvcount_node[node];
-      senddispl_node[node+1] = senddispl_node[node] + sendcount_node[node];
-    }
-    int sendtot_node = senddispl_node[numrank_node_t];
-    int recvtot_node = recvdispl_node[numrank_node_t];
-    int sendall_node[numrank];
-    int recvall_node[numrank];
-    MPI_Allgather(&sendtot_node,1,MPI_INT,sendall_node,1,MPI_INT,MPI_COMM_WORLD);
-    MPI_Allgather(&recvtot_node,1,MPI_INT,recvall_node,1,MPI_INT,MPI_COMM_WORLD);
-    MPI_Allreduce(MPI_IN_PLACE,&sendtot_node,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    MPI_Allreduce(MPI_IN_PLACE,&recvtot_node,1,MPI_INT,MPI_SUM,MPI_COMM_WORLD);
-    if(myrank == 0){
-      printf("\nGLOBAL COMMUNICATIONS\n");
-      for(int rank = 0; rank < numrank; rank++)
-        printf("PROCESS %d SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n",rank,sendall_node[rank],numrhs,sendall_node[rank]*sizeof(double)/1.e9*numrhs,recvall_node[rank],numrhs,recvall_node[rank]*sizeof(double)/1.e9*numrhs);
-      printf("TOTAL COMM SEND %d x %d (%f GB) RECV %d x %d (%f GB)\n\n",sendtot_node,numrhs,sendtot_node*sizeof(double)/1.e9*numrhs,recvtot_node,numrhs,recvtot_node*sizeof(double)/1.e9*numrhs);
-    }
-    //CONSTRUCT SEND & RECEIVE INDICES
-    int *recvindex_node = new int[recvdispl_node[numrank_node_t]];
-    int *sendindex_node = new int[senddispl_node[numrank_node_t]];
-    #pragma omp parallel for
-    for(int node = 0; node < numrank_node_t; node++){
-      int rank = node*numrank_node+myrank_node;
-      int count = 0;
-      for(int m = coldispl[rank]; m < coldispl[rank+1]; m++)
-        if(footprint_node[m] > 0){
-          int index = recvdispl_node[node]+count;
-          recvindex_node[index] = m-coldispl[rank];
-          footprint_node[m] = index;
-          count++;
-        }
-    }
-    MPI_Alltoallv(recvindex_node,recvcount_node,recvdispl_node,MPI_INT,sendindex_node,sendcount_node,senddispl_node,MPI_INT,MPI_COMM_NODE_T);
-  }
+
+  MPI_Comm_free(&MPI_COMM_NODE);
+  MPI_Comm_free(&MPI_COMM_NODE_T);
+  MPI_Comm_free(&MPI_COMM_SOCKET);
+  MPI_Comm_free(&MPI_COMM_SOCKET_T);
 
   MPI_Barrier(MPI_COMM_WORLD);
-  if(myrank == 0)printf("\nTOTAL TIME: %e\n\n",MPI_Wtime()-timetotal);
+  if(myid == PRINTID)printf("\nTOTAL TIME: %e\n\n",omp_get_wtime()-timetotal);
 
   MPI_Finalize();
 
